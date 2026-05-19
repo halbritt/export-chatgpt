@@ -65,6 +65,7 @@ describe('api', () => {
       return {
         items: gizmos.map(g => ({
           gizmo: { gizmo: g, files: g.files || [] },
+          conversations: g.conversations,
         })),
         cursor,
       };
@@ -90,6 +91,62 @@ describe('api', () => {
 
       expect(projects).toHaveLength(1);
       expect(projects[0].conversation_count).toBeNull();
+    });
+
+    test('requests zero sidebar conversation previews by default', async () => {
+      mockFetchPages([makeSidebarResponse([makeGizmo('proj-1')])]);
+
+      await fetchProjectList('token', makeProgress());
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('conversations_per_gizmo=0'),
+        expect.anything()
+      );
+    });
+
+    test('requests and returns sidebar conversation previews when configured', async () => {
+      const gizmo = {
+        ...makeGizmo('proj-1'),
+        conversations: {
+          items: [
+            {
+              id: 'conv-preview',
+              title: 'Preview Chat',
+              create_time: '2026-05-18T10:00:00Z',
+              update_time: '2026-05-19T10:00:00Z',
+              gizmo_id: 'proj-1',
+            },
+          ],
+          cursor: null,
+        },
+      };
+      mockFetchPages([makeSidebarResponse([gizmo])]);
+
+      const projects = await fetchProjectList('token', makeProgress(), { conversationsPerGizmo: 10 });
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('conversations_per_gizmo=10'),
+        expect.anything()
+      );
+      expect(projects[0]._hasConversationPreviewContainer).toBe(true);
+      expect(projects[0]._conversationPreviews).toEqual(gizmo.conversations.items);
+    });
+
+    test('does not persist internal sidebar preview fields to project-index.json', async () => {
+      const gizmo = {
+        ...makeGizmo('proj-1'),
+        conversations: {
+          items: [{ id: 'conv-preview', title: 'Preview Chat' }],
+          cursor: null,
+        },
+      };
+      mockFetchPages([makeSidebarResponse([gizmo])]);
+
+      await fetchProjectList('token', makeProgress(), { conversationsPerGizmo: 10 });
+
+      const saved = JSON.parse(fs.readFileSync(PATHS.projectIndexFile, 'utf8'));
+      expect(saved[0]._conversationPreviews).toBeUndefined();
+      expect(saved[0]._hasConversationPreviewContainer).toBeUndefined();
     });
 
     test('update mode refreshes project list even when progress says complete', async () => {

@@ -1,11 +1,11 @@
 'use strict';
 
 describe('downloader', () => {
-  let extractFileReferences, getExtensionFromFilename;
+  let extractFileReferences, getExtensionFromFilename, getFileDownloadUrl;
 
   beforeEach(() => {
     jest.resetModules();
-    ({ extractFileReferences, getExtensionFromFilename } = require('../../lib/downloader'));
+    ({ extractFileReferences, getExtensionFromFilename, getFileDownloadUrl } = require('../../lib/downloader'));
   });
 
   describe('extractFileReferences', () => {
@@ -176,6 +176,30 @@ describe('downloader', () => {
     test('returns empty string for null/undefined', () => {
       expect(getExtensionFromFilename(null)).toBe('');
       expect(getExtensionFromFilename(undefined)).toBe('');
+    });
+  });
+
+  describe('getFileDownloadUrl', () => {
+    afterEach(() => {
+      if (global.fetch?.mockRestore) global.fetch.mockRestore();
+    });
+
+    test('URL-encodes composite file IDs but keeps the API response unchanged', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: () => Promise.resolve({ status: 'success', download_url: 'https://files.example/download' }),
+      });
+
+      const fileId = 'abc#file_123#p_0.jpg';
+      const result = await getFileDownloadUrl('token', fileId, 'conv-1');
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/files/download/abc%23file_123%23p_0.jpg?conversation_id=conv-1&inline=false'),
+        expect.anything()
+      );
+      expect(result).toEqual({ status: 'success', download_url: 'https://files.example/download' });
     });
   });
 });
