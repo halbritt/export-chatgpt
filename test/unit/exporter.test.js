@@ -153,4 +153,87 @@ describe('exporter', () => {
       expect(output).toContain('2 found');
     });
   });
+
+  describe('update max ordering', () => {
+    let fs, os, tmpDir, PATHS, initPaths, fetchConversation;
+
+    function makeConv(id, update_time) {
+      return { id, title: `Chat ${id}`, create_time: 1700000000, update_time };
+    }
+
+    async function loadExporterWithIndex(conversations) {
+      jest.resetModules();
+      fs = require('fs');
+      os = require('os');
+      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'exporter-update-test-'));
+
+      fetchConversation = jest.fn(async (_accessToken, id) => makeConv(id, 1700000000));
+      jest.doMock('../../lib/api', () => ({
+        fetchConversation: fetchConversation,
+        fetchConversationListIncremental: jest.fn(async () => (
+          new Map(conversations.map(conv => [conv.id, conv]))
+        )),
+        fetchProjectList: jest.fn(),
+        fetchProjectConversations: jest.fn(),
+      }));
+      jest.doMock('../../lib/downloader', () => ({
+        downloadConversationFiles: jest.fn(async () => 0),
+        downloadProjectFiles: jest.fn(async () => 0),
+        retryPendingFiles: jest.fn(async () => 0),
+      }));
+
+      ({ CONFIG, PATHS, initPaths } = require('../../lib/config'));
+      CONFIG.outputDir = tmpDir;
+      CONFIG.exportFormat = 'json';
+      CONFIG.downloadFiles = false;
+      CONFIG.includeProjects = false;
+      CONFIG.projectsOnly = false;
+      CONFIG.showSummary = false;
+      CONFIG.throttleMs = 0;
+      initPaths();
+
+      return require('../../lib/exporter');
+    }
+
+    afterEach(() => {
+      jest.restoreAllMocks();
+      if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    test('conversationTimestamp supports number, numeric string, and ISO string', async () => {
+      const { conversationTimestamp } = await loadExporterWithIndex([]);
+
+      expect(conversationTimestamp({ update_time: 1700000000 })).toBe(1700000000);
+      expect(conversationTimestamp({ update_time: '1700000001' })).toBe(1700000001);
+      expect(conversationTimestamp({ update_time: '2023-11-14T22:13:22.000Z' })).toBe(1700000002);
+    });
+
+    test('update with max exports the freshest conversations by update_time', async () => {
+      const { exportConversations } = await loadExporterWithIndex([
+        makeConv('old', 100),
+        makeConv('fresh', '2023-11-14T22:13:22.000Z'),
+        makeConv('middle', '1700000001'),
+      ]);
+      CONFIG.updateExisting = true;
+      CONFIG.maxConversations = 2;
+
+      await exportConversations('token', { downloadedIds: ['old', 'fresh', 'middle'] });
+
+      expect(fetchConversation.mock.calls.map(call => call[1])).toEqual(['fresh', 'middle']);
+    });
+
+    test('max without update preserves existing insertion-order resume behavior', async () => {
+      const { exportConversations } = await loadExporterWithIndex([
+        makeConv('old', 100),
+        makeConv('fresh', '2023-11-14T22:13:22.000Z'),
+        makeConv('middle', '1700000001'),
+      ]);
+      CONFIG.updateExisting = false;
+      CONFIG.maxConversations = 2;
+
+      await exportConversations('token', { downloadedIds: [] });
+
+      expect(fetchConversation.mock.calls.map(call => call[1])).toEqual(['old', 'fresh']);
+    });
+  });
 });
