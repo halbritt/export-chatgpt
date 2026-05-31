@@ -19,6 +19,7 @@ describe('api', () => {
     CONFIG.outputDir = tmpDir;
     CONFIG.throttleMs = 0;
     CONFIG.conversationsPerPage = 28;
+    CONFIG.updateExisting = false;
     initPaths();
 
     ({ fetchConversationListIncremental, fetchProjectList, fetchProjectConversations } = require('../../lib/api'));
@@ -64,6 +65,7 @@ describe('api', () => {
       return {
         items: gizmos.map(g => ({
           gizmo: { gizmo: g, files: g.files || [] },
+          conversations: g.conversations,
         })),
         cursor,
       };
@@ -89,6 +91,77 @@ describe('api', () => {
 
       expect(projects).toHaveLength(1);
       expect(projects[0].conversation_count).toBeNull();
+    });
+
+    test('requests zero sidebar conversation previews by default', async () => {
+      mockFetchPages([makeSidebarResponse([makeGizmo('proj-1')])]);
+
+      await fetchProjectList('token', makeProgress());
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('conversations_per_gizmo=0'),
+        expect.anything()
+      );
+    });
+
+    test('requests and returns sidebar conversation previews when configured', async () => {
+      const gizmo = {
+        ...makeGizmo('proj-1'),
+        conversations: {
+          items: [
+            {
+              id: 'conv-preview',
+              title: 'Preview Chat',
+              create_time: '2026-05-18T10:00:00Z',
+              update_time: '2026-05-19T10:00:00Z',
+              gizmo_id: 'proj-1',
+            },
+          ],
+          cursor: null,
+        },
+      };
+      mockFetchPages([makeSidebarResponse([gizmo])]);
+
+      const projects = await fetchProjectList('token', makeProgress(), { conversationsPerGizmo: 10 });
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('conversations_per_gizmo=10'),
+        expect.anything()
+      );
+      expect(projects[0]._hasConversationPreviewContainer).toBe(true);
+      expect(projects[0]._conversationPreviews).toEqual(gizmo.conversations.items);
+    });
+
+    test('does not persist internal sidebar preview fields to project-index.json', async () => {
+      const gizmo = {
+        ...makeGizmo('proj-1'),
+        conversations: {
+          items: [{ id: 'conv-preview', title: 'Preview Chat' }],
+          cursor: null,
+        },
+      };
+      mockFetchPages([makeSidebarResponse([gizmo])]);
+
+      await fetchProjectList('token', makeProgress(), { conversationsPerGizmo: 10 });
+
+      const saved = JSON.parse(fs.readFileSync(PATHS.projectIndexFile, 'utf8'));
+      expect(saved[0]._conversationPreviews).toBeUndefined();
+      expect(saved[0]._hasConversationPreviewContainer).toBeUndefined();
+    });
+
+    test('update mode refreshes project list even when progress says complete', async () => {
+      CONFIG.updateExisting = true;
+      fs.mkdirSync(PATHS.projectsDir, { recursive: true });
+      fs.writeFileSync(PATHS.projectIndexFile, JSON.stringify([
+        { id: 'proj-old', name: 'Old Project', conversation_count: 1 },
+      ]));
+      mockFetchPages([makeSidebarResponse([makeGizmo('proj-new', 'New Project')])]);
+
+      const progress = makeProgress({ projectsIndexingComplete: true });
+      const projects = await fetchProjectList('token', progress);
+
+      expect(projects.map(p => p.id)).toEqual(['proj-new']);
+      expect(global.fetch).toHaveBeenCalledTimes(1);
     });
 
     test('conversation_count is null in saved project-index.json', async () => {
@@ -133,6 +206,52 @@ describe('api', () => {
       // Verify the persisted index also updated
       const saved = JSON.parse(fs.readFileSync(PATHS.projectIndexFile, 'utf8'));
       expect(saved[0].conversation_count).toBe(3);
+    });
+  });
+
+  describe('fetchProjectConversations — update refresh', () => {
+    test('refreshes existing project conversations and adds new ids in update mode', async () => {
+      CONFIG.updateExisting = true;
+      const progress = makeProgress({
+        projects: {
+          'proj-1': {
+            name: 'Project One',
+            indexingComplete: true,
+            lastCursor: null,
+            downloadedIds: ['conv-old'],
+          },
+        },
+      });
+      const project = { id: 'proj-1', name: 'Project One' };
+      const projectDir = path.join(PATHS.projectsDir, 'Project_One');
+      fs.mkdirSync(projectDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(projectDir, 'conversation-index.json'),
+        JSON.stringify([{ ...makeConv('conv-old', 1700001000), title: 'Old title' }])
+      );
+      mockFetchPages([
+        {
+          items: [
+            { ...makeConv('conv-new', 1700003000), gizmo_id: 'proj-1' },
+            { ...makeConv('conv-old', 1700002000), title: 'New title', gizmo_id: 'proj-1' },
+          ],
+          cursor: null,
+        },
+      ]);
+
+      const conversations = await fetchProjectConversations('token', project, progress);
+
+      expect(conversations.map(c => c.id)).toEqual(['conv-old', 'conv-new']);
+      expect(conversations[0]).toMatchObject({
+        id: 'conv-old',
+        update_time: 1700002000,
+        title: 'New title',
+        gizmo_id: 'proj-1',
+      });
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('cursor=0'),
+        expect.anything()
+      );
     });
   });
 
@@ -190,6 +309,30 @@ describe('api', () => {
 
       expect(result.has('conv-new')).toBe(true);
       expect(result.size).toBe(2);
+    });
+
+    test('refreshes metadata for existing conversation ids', async () => {
+      const existingIndex = new Map([
+        ['conv-old', { ...makeConv('conv-old', 1700001000), title: 'Old title', gizmo_id: 'old-project' }],
+      ]);
+      const progress = makeProgress({ indexingComplete: true });
+
+      mockFetchPages([
+        {
+          items: [
+            { ...makeConv('conv-old', 1700003000), title: 'New title', gizmo_id: 'new-project' },
+          ],
+          total: 1, limit: 28, offset: 0,
+        },
+      ]);
+
+      const result = await fetchConversationListIncremental('token', existingIndex, progress);
+
+      expect(result.get('conv-old')).toMatchObject({
+        update_time: 1700003000,
+        title: 'New title',
+        gizmo_id: 'new-project',
+      });
     });
   });
 });

@@ -503,6 +503,43 @@ describe('downloader failure cases', () => {
         .rejects.toThrow(/File download failed/);
       expect(global.fetch).toHaveBeenCalledTimes(3);
     });
+
+    test('does not retry CDN 404 responses', async () => {
+      const { downloadFile } = require('../../lib/downloader');
+
+      global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 404 });
+
+      const outPath = path.join(tmpDir, 'deleted.png');
+      await expect(downloadFile('https://cdn.example.com/deleted.png', outPath, 'token'))
+        .rejects.toMatchObject({ noRetry: true });
+      expect(global.fetch).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('retryPendingFiles - terminal failures', () => {
+    test('marks HTTP 404 download-url failures as file_not_found', async () => {
+      const { retryPendingFiles } = require('../../lib/downloader');
+      const { saveIndex, loadProgress } = require('../../lib/storage');
+
+      saveIndex(new Map([
+        ['conv-1', {
+          id: 'conv-1',
+          files: [{ fileId: 'gone-file', type: 'image' }],
+        }],
+      ]));
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 404,
+        statusText: 'Not Found',
+      });
+
+      const progress = loadProgress();
+      const count = await retryPendingFiles('token', progress);
+
+      expect(count).toBe(0);
+      expect(progress.failedFileIds['gone-file']).toBe('file_not_found');
+      expect(global.fetch).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('extractFileReferences - robustness', () => {

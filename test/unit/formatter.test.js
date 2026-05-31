@@ -361,6 +361,33 @@ describe('formatter', () => {
       expect(md).toContain('Hi there!');
     });
 
+    test('writes user message timestamp on the line after the heading', () => {
+      const { conversationToMarkdown } = load();
+      const conversation = {
+        id: 'test-id-123',
+        title: 'Test Conversation',
+        create_time: 1700000000,
+        update_time: 1700001000,
+        mapping: {
+          root: { parent: null, children: ['msg1'], message: null },
+          msg1: {
+            parent: 'root',
+            children: [],
+            message: {
+              create_time: 1700000000,
+              content: { content_type: 'text', parts: ['Hello'] },
+              author: { role: 'user' },
+              metadata: {},
+            },
+          },
+        },
+      };
+
+      const md = conversationToMarkdown(conversation);
+
+      expect(md).toContain('## User\n\n2023-11-14 22:13:20Z\n\nHello');
+    });
+
     test('includes project_id when gizmo_id present', () => {
       const { conversationToMarkdown } = load();
       const conversation = {

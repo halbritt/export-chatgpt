@@ -134,6 +134,23 @@ describe('auth failure cases', () => {
       const result = await verifyToken('any-token');
       expect(result).toBe(false);
     });
+
+    test('uses browserFetch when browser fetch mode is enabled', async () => {
+      jest.resetModules();
+      const browserFetch = jest.fn().mockResolvedValue({ ok: true, status: 200 });
+      jest.doMock('../../lib/browser-fetch', () => ({ browserFetch }));
+      ({ CONFIG } = require('../../lib/config'));
+      CONFIG.useBrowserFetch = true;
+      ({ verifyToken } = require('../../lib/auth'));
+
+      const result = await verifyToken('valid-token');
+
+      expect(result).toBe(true);
+      expect(browserFetch).toHaveBeenCalledWith(
+        expect.stringContaining('/conversations?limit=1'),
+        expect.objectContaining({ headers: expect.any(Object) }),
+      );
+    });
   });
 
   describe('getAccessToken - failure cases', () => {
