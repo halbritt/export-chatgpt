@@ -33,6 +33,7 @@ shapes over anything here. The long-form companion is
 This repository is represented in the local/private Plane workspace `Proximal`.
 
 - Plane project: `Export Chatgpt` (`EXPCHA`)
+- Issue tracker: Plane (`Proximal` workspace), project `Export Chatgpt` (`EXPCHA`).
 - Plane URL: `https://proximal.tail0ecc2e.ts.net:10000/`
 - GitHub repo: `https://github.com/halbritt/export-chatgpt`
 - Use Plane work items for multi-agent planning, claims, submitted artifacts, reviews, and acceptance decisions.
